@@ -1,0 +1,10 @@
+{
+      "radiusmain": {
+        "host": "localhost",
+        "user": "admin",
+        "password": "admin",
+        "database": "elt",
+        "port": 5432
+      }
+    }
+    
