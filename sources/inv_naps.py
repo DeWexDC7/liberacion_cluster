@@ -92,6 +92,54 @@ def procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, connection
         print(f"Error al procesar la búsqueda por faltantes: {e}")
         return None
 
+# Función para separar los datos obtenidos en variables independientes
+def definicion_variables(df):
+    """
+    Separa los datos obtenidos en variables independientes.
+    """
+    try:
+        required_columns = [
+            'hub', 'cluster', 'olt', 'frame', 'slot', 
+            'puerto', 'nap', 'puertos_nap', 'latitud', 'longitud', 'zona'
+        ]
+        # Verificar si todas las columnas requeridas están presentes
+        if not all(col in df.columns for col in required_columns):
+            print(f"Faltan columnas en el DataFrame: {set(required_columns) - set(df.columns)}")
+            return None
+        
+        # Definir las variables
+        hub = df['hub'].values[0]
+        cluster = df['cluster'].values[0]
+        olt = df['olt'].values[0]
+        frame = df['frame'].values[0]
+        slot = df['slot'].values[0]
+        puerto = df['puerto'].values[0]
+        nap = df['nap'].values[0]
+        puertos_nap = df['puertos_nap'].values[0]
+        latitud = df['latitud'].values[0]
+        longitud = df['longitud'].values[0]
+        coordendas = f"({latitud}, {longitud})"
+        region = df['region'].values[0]
+
+        # Print the variables
+        print(f"hub: {hub}")
+        print(f"cluster: {cluster}")
+        print(f"olt: {olt}")
+        print(f"frame: {frame}")
+        print(f"slot: {slot}")
+        print(f"puerto: {puerto}")
+        print(f"nap: {nap}")
+        print(f"puertos_nap: {puertos_nap}")
+        print(f"latitud: {latitud}")
+        print(f"longitud: {longitud}")
+        print(f"coordendas: {coordendas}")
+        print(f"region: {region}")
+
+        return hub, cluster, olt, frame, slot, puerto, nap, puertos_nap, latitud, longitud, coordendas, region
+    except Exception as e:
+        print(f"Error al definir las variables: {e}")
+        return None
+
 # Función para obtener solo la región desde la tabla `clusters`
 def obtener_region_cluster(cluster, cursor):
     """
@@ -154,14 +202,16 @@ def main():
         
         if df_resultado is not None and not df_resultado.empty:
             print("Datos procesados y exportados correctamente.")
-        else:
-            print("No se generó ningún resultado para exportar.")
+            # Llamar a la función para separar variables
+            variables = definicion_variables(df_resultado)
+            
     else:
         print("Error al cargar los valores faltantes desde el archivo CSV. Verifique que el archivo contiene los datos necesarios.")
 
     # Cerrar conexión a la base de datos
     if connection:
         connection.close()
+    
 
 # Ejecución del script
 if __name__ == '__main__':
