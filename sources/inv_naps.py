@@ -5,9 +5,12 @@ import json
 
 # Función para leer los datos de configuración de la base de datos
 def read_db_credentials(config_path):
+    """
+    Lee las credenciales desde un archivo JSON.
+    """
     with open(config_path, 'r') as file:
         config = json.load(file)
-    return config['PostgresSQL']
+    return config['PostgresSQL'], config['radiusmain']
 
 # Función para leer los datos desde el archivo CSV sin header
 def leer_csv_sin_header(ruta_csv):
@@ -23,9 +26,9 @@ def leer_csv_sin_header(ruta_csv):
         return None
 
 # Función para procesar los datos faltantes
-def procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, connection, exportar, ruta_salida_base):
+def procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, postgres_connection, exportar, ruta_salida_base):
     """
-    Procesa los datos faltantes desde un archivo Excel, los cruza con los faltantes, 
+    Procesa los datos faltantes desde un archivo Excel, los cruza con los faltantes,
     y exporta el resultado filtrado.
     """
     try:
@@ -39,8 +42,8 @@ def procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, connection
         resultado = df[df['CODIGO_NAP'].isin(df_faltantes['CODIGO_NAP'])]
 
         # Extraer solo la columna `region` desde la base de datos usando la columna `cluster`
-        cursor = connection.cursor()
-        resultado['region'] = resultado['CLUSTER'].apply(
+        cursor = postgres_connection.cursor()
+        resultado.loc[:, 'region'] = resultado['CLUSTER'].apply(
             lambda cluster: obtener_region_cluster(cluster, cursor)
         )
 
@@ -92,54 +95,6 @@ def procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, connection
         print(f"Error al procesar la búsqueda por faltantes: {e}")
         return None
 
-# Función para separar los datos obtenidos en variables independientes
-def definicion_variables(df):
-    """
-    Separa los datos obtenidos en variables independientes.
-    """
-    try:
-        required_columns = [
-            'hub', 'cluster', 'olt', 'frame', 'slot', 
-            'puerto', 'nap', 'puertos_nap', 'latitud', 'longitud', 'zona'
-        ]
-        # Verificar si todas las columnas requeridas están presentes
-        if not all(col in df.columns for col in required_columns):
-            print(f"Faltan columnas en el DataFrame: {set(required_columns) - set(df.columns)}")
-            return None
-        
-        # Definir las variables
-        hub = df['hub'].values[0]
-        cluster = df['cluster'].values[0]
-        olt = df['olt'].values[0]
-        frame = df['frame'].values[0]
-        slot = df['slot'].values[0]
-        puerto = df['puerto'].values[0]
-        nap = df['nap'].values[0]
-        puertos_nap = df['puertos_nap'].values[0]
-        latitud = df['latitud'].values[0]
-        longitud = df['longitud'].values[0]
-        coordendas = f"({latitud}, {longitud})"
-        region = df['region'].values[0]
-
-        # Print the variables
-        print(f"hub: {hub}")
-        print(f"cluster: {cluster}")
-        print(f"olt: {olt}")
-        print(f"frame: {frame}")
-        print(f"slot: {slot}")
-        print(f"puerto: {puerto}")
-        print(f"nap: {nap}")
-        print(f"puertos_nap: {puertos_nap}")
-        print(f"latitud: {latitud}")
-        print(f"longitud: {longitud}")
-        print(f"coordendas: {coordendas}")
-        print(f"region: {region}")
-
-        return hub, cluster, olt, frame, slot, puerto, nap, puertos_nap, latitud, longitud, coordendas, region
-    except Exception as e:
-        print(f"Error al definir las variables: {e}")
-        return None
-
 # Función para obtener solo la región desde la tabla `clusters`
 def obtener_region_cluster(cluster, cursor):
     """
@@ -150,22 +105,82 @@ def obtener_region_cluster(cluster, cursor):
         cursor.execute(query, (cluster,))
         resultado = cursor.fetchone()
         if resultado:
-            print(f"Datos para cluster {cluster}: {resultado}")  # Depuración
-            return resultado[0]  # Retorna solo la región
-        print(f"No se encontraron datos para el cluster {cluster}")
+            return resultado[0]
         return "[null]"
     except Exception as e:
-        print(f"Error al obtener los datos desde la base de datos para {cluster}: {e}")
+        print(f"Error al obtener la región para el cluster {cluster}: {e}")
         return "[null]"
+
+# Función para separar los datos obtenidos en variables independientes
+def definicion_variables(df):
+    """
+    Separa los datos obtenidos en variables independientes.
+    """
+    try:
+        required_columns = [
+            'hub', 'cluster', 'olt', 'frame', 'slot', 
+            'puerto', 'nap', 'puertos_nap', 'latitud', 'longitud', 'zona', 'region'
+        ]
+        # Verificar si todas las columnas requeridas están presentes
+        if not all(col in df.columns for col in required_columns):
+            print(f"Faltan columnas en el DataFrame: {set(required_columns) - set(df.columns)}")
+            return None
+        
+        # Definir las variables
+        variables = {col: df[col].values[0] for col in required_columns}
+        variables['coordenadas'] = f"({variables['latitud']}, {variables['longitud']})"
+
+        for key, value in variables.items():
+            print(f"{key}: {value}")
+
+        return variables
+    except Exception as e:
+        print(f"Error al definir las variables: {e}")
+        return None
+
+# Función para subir los datos obtenidos en variables independientes a una bd
+def subir_datos_a_bd(variables, radiusmain_credentials):
+    """
+    Sube los datos obtenidos en variables independientes a la base de datos radiusmain.
+    """
+    print("--- Subiendo datos a la base de datos RadiusMain ---")
+    try:
+        # Convertir valores a tipos nativos de Python
+        variables = {k: (v.item() if hasattr(v, 'item') else v) for k, v in variables.items()}
+        
+        # Conexión a la base de datos radiusmain
+        connection = psycopg2.connect(
+            database=radiusmain_credentials['dbname'],
+            user=radiusmain_credentials['user'],
+            password=radiusmain_credentials['password'],
+            host=radiusmain_credentials['host'],
+            port=radiusmain_credentials['port']
+        )
+        cursor = connection.cursor()
+        
+        # Insertar los datos en la tabla
+        query = """
+            INSERT INTO public.inv_naps 
+            (hub, cluster, olt, frame, slot, puerto, nap, puertos_nap, latitud, longitud, coordenadas, region) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        cursor.execute(query, (
+            variables['hub'], variables['cluster'], variables['olt'], variables['frame'],
+            variables['slot'], variables['puerto'], variables['nap'], variables['puertos_nap'],
+            variables['latitud'], variables['longitud'], variables['coordenadas'], variables['region']
+        ))
+        connection.commit()
+        print("Datos subidos correctamente.")
+    except Exception as e:
+        print(f"Error al subir los datos a la base de datos RadiusMain: {e}")
+    finally:
+        if 'connection' in locals() and connection:
+            connection.close()
 
 # Función principal
 def main():
     """
-    Función principal que ejecuta el flujo completo:
-    1. Lee credenciales y conecta a la base de datos.
-    2. Lee un archivo Excel.
-    3. Compara la columna CODIGO_NAP del Excel con los faltantes.
-    4. Exporta los valores procesados a un archivo Excel.
+    Función principal que ejecuta el flujo completo.
     """
     config_path = 'conexion/config.json'
     ruta_archivo = 'data/data.xlsx'
@@ -174,45 +189,38 @@ def main():
     ruta_salida_base = 'Resultados_NAP'
     ruta_csv_faltantes = 'Faltantes/faltantes_codigos_nap_en_bd.csv'
 
-    # Leer las credenciales de la base de datos
-    db_credentials = read_db_credentials(config_path)
+    db_credentials, radiusmain_credentials = read_db_credentials(config_path)
 
-    # Establecer conexión a la base de datos
-    connection = None
     try:
-        connection = psycopg2.connect(
+        postgres_connection = psycopg2.connect(
             database=db_credentials['database'],
             user=db_credentials['user'],
             password=db_credentials['password'],
             host=db_credentials['host'],
             port=db_credentials['port']
         )
-        print("Conexión exitosa a la base de datos.")
+        print("Conexión exitosa a la base de datos PostgresSQL.")
     except Exception as e:
-        print(f"Error al conectar a la base de datos: {e}")
+        print(f"Error al conectar a la base de datos PostgresSQL: {e}")
         return
 
-    # Leer los valores faltantes desde el archivo CSV sin header
     df_faltantes = leer_csv_sin_header(ruta_csv_faltantes)
 
     if df_faltantes is not None and not df_faltantes.empty:
         print("-----Procesando códigos NAP faltantes-----")
-        # Procesar y obtener el DataFrame resultado
-        df_resultado = procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, connection, exportar, ruta_salida_base)
+        df_resultado = procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, postgres_connection, exportar, ruta_salida_base)
         
         if df_resultado is not None and not df_resultado.empty:
             print("Datos procesados y exportados correctamente.")
-            # Llamar a la función para separar variables
             variables = definicion_variables(df_resultado)
-            
+            if variables is not None:
+                subir_datos_a_bd(variables, radiusmain_credentials)
+
     else:
-        print("Error al cargar los valores faltantes desde el archivo CSV. Verifique que el archivo contiene los datos necesarios.")
+        print("Error al cargar los valores faltantes desde el archivo CSV.")
 
-    # Cerrar conexión a la base de datos
-    if connection:
-        connection.close()
-    
+    if postgres_connection:
+        postgres_connection.close()
 
-# Ejecución del script
 if __name__ == '__main__':
     main()
