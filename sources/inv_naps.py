@@ -32,65 +32,45 @@ def procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, postgres_c
     y exporta el resultado filtrado.
     """
     try:
-        # Leer la hoja principal del archivo Excel
         df = pd.read_excel(ruta_archivo, sheet_name=hoja)
-        
-        # Normalizar y limpiar los datos
         df['CODIGO_NAP'] = df['CODIGO_NAP'].astype(str).str.strip().str.upper()
+        resultados = []
 
-        # Filtrar los datos que coinciden con los faltantes
-        resultado = df[df['CODIGO_NAP'].isin(df_faltantes['CODIGO_NAP'])]
+        with postgres_connection.cursor() as cursor:
+            for codigo_nap in df_faltantes['CODIGO_NAP']:
+                resultado = df[df['CODIGO_NAP'] == codigo_nap]
+                if resultado.empty:
+                    print(f"No se encontró información para el código NAP: {codigo_nap}")
+                    continue
 
-        # Extraer solo la columna `region` desde la base de datos usando la columna `cluster`
-        cursor = postgres_connection.cursor()
-        resultado.loc[:, 'region'] = resultado['CLUSTER'].apply(
-            lambda cluster: obtener_region_cluster(cluster, cursor)
-        )
+                resultado['region'] = resultado['CLUSTER'].apply(lambda cluster: obtener_region_cluster(cluster, cursor))
+                resultado = resultado.rename(columns={
+                    "HUB": "hub", "CLUSTER": "cluster", "OLT": "olt", "FRAME": "frame",
+                    "SLOT": "slot", "PUERTO": "puerto", "CODIGO_NAP": "nap", "# PUERTOS NAP": "puertos_nap",
+                    "LATITUD": "latitud", "LONGITUD": "longitud"
+                })
+                
+                resultado["coordenadas"] = resultado.apply(lambda row: f"({row['longitud']}, {row['latitud']})", axis=1)
+                resultado["fecha_de_liberacion"] = datetime.now().strftime('%Y-%m-%d')
+                resultado["zona"] = "[null]"
 
-        # Ajustar las columnas para coincidir con los campos de la tabla SQL
-        resultado = resultado.rename(
-            columns={
-                "HUB": "hub",
-                "CLUSTER": "cluster",
-                "OLT": "olt",
-                "FRAME": "frame",
-                "SLOT": "slot",
-                "PUERTO": "puerto",
-                "CODIGO_NAP": "nap",
-                "# PUERTOS NAP": "puertos_nap",
-                "LATITUD": "latitud",
-                "LONGITUD": "longitud",
-            }
-        )
+                columnas_finales = [
+                    "hub", "cluster", "olt", "frame", "slot", "puerto", "nap",
+                    "puertos_nap", "coordenadas", "fecha_de_liberacion", "region", "zona", "latitud", "longitud"
+                ]
+                resultado = resultado[columnas_finales]
+                resultados.append(resultado)
         
-        # Crear la columna `coordenadas` concatenando longitud y latitud entre paréntesis
-        resultado["coordenadas"] = resultado.apply(
-            lambda row: f"({row['longitud']}, {row['latitud']})", axis=1
-        )
-        
-        # Agregar columna `fecha_de_liberacion` usando la fecha del sistema
-        resultado["fecha_de_liberacion"] = datetime.now().strftime('%Y-%m-%d')
-
-        # Agregar columna `zona` con valor predeterminado `null`
-        resultado["zona"] = "[null]"
-
-        # Reorganizar las columnas
-        columnas_finales = [
-            "hub", "cluster", "olt", "frame", "slot", "puerto", "nap",
-            "puertos_nap", "coordenadas", "fecha_de_liberacion", "region", "zona", "latitud", "longitud"
-        ]
-        resultado = resultado[columnas_finales]
-        
-        if exportar:
-            # Obtener la fecha actual
-            fecha_actual = datetime.now().strftime('%Y%m%d')
-            # Crear el nombre del archivo con la fecha
-            nombre_archivo = f"Registros_Naps/{ruta_salida_base}_{fecha_actual}_{cluster}.xlsx"
-            # Exportar a Excel
-            resultado.to_excel(nombre_archivo, index=False)
-            print(f"Archivo exportado: {nombre_archivo}")
-        
-        return resultado
+        if resultados:
+            df_final = pd.concat(resultados, ignore_index=True)
+            if exportar:
+                fecha_actual = datetime.now().strftime('%Y%m%d')
+                nombre_archivo = f"Registros_Naps/{ruta_salida_base}_{fecha_actual}_{cluster}.xlsx"
+                df_final.to_excel(nombre_archivo, index=False)
+                print(f"Archivo exportado: {nombre_archivo}")
+            return df_final
+        else:
+            return None
     except Exception as e:
         print(f"Error al procesar la búsqueda por faltantes: {e}")
         return None
@@ -138,23 +118,12 @@ def definicion_variables(df):
         print(f"Error al definir las variables: {e}")
         return None
 
-def subir_datos_a_bd(variables, radiusmain_credentials):
+def subir_datos_a_bd(df, radiusmain_credentials):
     """
-    Sube los datos obtenidos en variables independientes a la base de datos radiusmain.
+    Sube los datos obtenidos en el DataFrame a la base de datos radiusmain.
     """
     print("--- Subiendo datos a la base de datos RadiusMain ---")
     try:
-        # Convertir valores a tipos nativos de Python
-        variables = {k: (v.item() if hasattr(v, 'item') else v) for k, v in variables.items()}
-        
-        # Validar que todos los valores requeridos estén presentes
-        required_keys = ['hub', 'cluster', 'olt', 'frame', 'slot', 'puerto', 'nap', 
-                         'puertos_nap', 'latitud', 'longitud', 'coordenadas', 'region', 'zona']
-        
-        for key in required_keys:
-            if key not in variables or variables[key] is None:
-                variables[key] = '[null]'  # Valor predeterminado
-
         # Conexión a la base de datos radiusmain
         connection = psycopg2.connect(
             database=radiusmain_credentials['dbname'],
@@ -165,19 +134,20 @@ def subir_datos_a_bd(variables, radiusmain_credentials):
         )
         cursor = connection.cursor()
         fecha_de_liberacion = datetime.now().strftime('%Y-%m-%d')
-        
-        # Insertar los datos en la tabla
-        query = """
-            INSERT INTO public.inv_naps 
-            (hub, cluster, olt, frame, slot, puerto, nap, puertos_nap, latitud, longitud, coordenadas, region, fecha_de_liberacion, zona) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        cursor.execute(query, (
-            variables['hub'], variables['cluster'], variables['olt'], variables['frame'],
-            variables['slot'], variables['puerto'], variables['nap'], variables['puertos_nap'],
-            variables['latitud'], variables['longitud'], variables['coordenadas'], variables['region'],
-            fecha_de_liberacion, variables['zona']
-        ))
+
+        for index, row in df.iterrows():
+            # Insertar los datos en la tabla
+            query = """
+                INSERT INTO public.inv_naps 
+                (hub, cluster, olt, frame, slot, puerto, nap, puertos_nap, latitud, longitud, coordenadas, region, fecha_de_liberacion, zona) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            cursor.execute(query, (
+                row['hub'], row['cluster'], row['olt'], row['frame'],
+                row['slot'], row['puerto'], row['nap'], row['puertos_nap'],
+                row['latitud'], row['longitud'], row['coordenadas'], row['region'],
+                fecha_de_liberacion, row['zona']
+            ))
         connection.commit()
         print("Datos subidos correctamente.")
     except Exception as e:
@@ -185,7 +155,6 @@ def subir_datos_a_bd(variables, radiusmain_credentials):
     finally:
         if 'connection' in locals() and connection:
             connection.close()
-
 
 # Función principal
 def main():
@@ -232,9 +201,7 @@ def main():
         
         if df_resultado is not None and not df_resultado.empty:
             print("Datos procesados y exportados correctamente.")
-            variables = definicion_variables(df_resultado)
-            if variables is not None:
-                subir_datos_a_bd(variables, radiusmain_credentials)
+            subir_datos_a_bd(df_resultado, radiusmain_credentials)
 
     else:
         print("Error al cargar los valores faltantes desde el archivo CSV.")
