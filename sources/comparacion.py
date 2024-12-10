@@ -1,6 +1,7 @@
 import psycopg2
 import json
 import pandas as pd
+from datetime import datetime
 
 # Función para leer credenciales de la base de datos desde un archivo JSON
 def read_db_credentials(config_path):
@@ -57,30 +58,36 @@ def verificar_faltantes(df, connection):
     try:
         # Normalizar la columna del archivo Excel
         df['CODIGO_NAP'] = df['CODIGO_NAP'].astype(str).str.strip().str.upper()
-        codigos_excel = df['CODIGO_NAP'].tolist()
-
-        df['CLUSTER' ] = df['CLUSTER' ].astype(str).str.strip().str.upper()
-        cluster_excel = df['CLUSTER' ].tolist()
-
-        # Filtrar los valores 'nap' y 'NAN'
-        codigos_excel = [codigo for codigo in codigos_excel if codigo not in ['NAP', 'NAN']]
-
-        # Consulta para obtener los valores existentes en la base de datos
-        cursor = connection.cursor()
-        cursor.execute("SELECT nap FROM public.inv_naps where cluster in %s", (tuple(cluster_excel),))
-        codigos_bd = [row[0].strip().upper() for row in cursor.fetchall()]
-
-        # Identificar los valores que están en el Excel pero no en la base de datos
-        faltantes_excel = [codigo for codigo in codigos_excel if codigo not in codigos_bd]
-
-        # Crear un DataFrame con los valores faltantes
-        df_faltantes_excel = pd.DataFrame(faltantes_excel, columns=['nap'])
+        df['CLUSTER'] = df['CLUSTER'].astype(str).str.strip().str.upper()
         
-        return df_faltantes_excel
+        # Filtrar los valores 'nap' y 'NAN'
+        df = df[~df['CODIGO_NAP'].isin(['NAP', 'NAN'])]
+
+        # Consulta para obtener los valores existentes en la base de datos por cluster
+        cursor = connection.cursor()
+        clusters = df['CLUSTER'].unique()
+
+        faltantes_por_cluster = {}
+
+        for cluster in clusters:
+            # Filtrar el cluster actual
+            df_cluster = df[df['CLUSTER'] == cluster]
+            codigos_excel = df_cluster['CODIGO_NAP'].tolist()
+
+            cursor.execute("SELECT nap FROM public.inv_naps WHERE cluster = %s", (cluster,))
+            codigos_bd = [row[0].strip().upper() for row in cursor.fetchall()]
+
+            # Identificar los valores que están en el Excel pero no en la base de datos
+            faltantes_excel = [codigo for codigo in codigos_excel if codigo not in codigos_bd]
+
+            if faltantes_excel:
+                faltantes_por_cluster[cluster] = faltantes_excel
+
+        return faltantes_por_cluster
 
     except Exception as e:
         print(f"Error al verificar los faltantes: {e}")
-        return pd.DataFrame()
+        return {}
 
 # Función principal
 def main():
@@ -89,11 +96,11 @@ def main():
     1. Lee credenciales y conecta a la base de datos.
     2. Lee un archivo Excel.
     3. Compara la columna CODIGO_NAP del Excel con la base de datos.
-    4. Exporta los valores faltantes a un archivo CSV.
+    4. Exporta los valores faltantes por cluster a archivos CSV.
     """
     config_path = 'conexion/config.json'  # Ruta al archivo de configuración
     ruta_archivo = 'Data/data.xlsx'       # Ruta al archivo Excel
-    hoja = 'Correo'                          # Hoja a procesar
+    hoja = 'Correo'                       # Hoja a procesar
 
     # Conexión a la base de datos
     connection = conexion_bd(config_path)
@@ -102,16 +109,29 @@ def main():
         # Leer el archivo Excel
         df = leer_archivo(ruta_archivo, hoja)
 
-        if df is not None and 'CODIGO_NAP' in df.columns:
-            print("-----Valores faltantes en la base de datos-----")
-            faltantes_excel = verificar_faltantes(df, connection)
-            print(faltantes_excel)
+        if df is not None and 'CODIGO_NAP' in df.columns and 'CLUSTER' in df.columns:
+            print("-----Procesando valores faltantes por cluster-----")
+            faltantes_por_cluster = verificar_faltantes(df, connection)
 
-            # Exportar los faltantes a un archivo CSV sin el header
-            faltantes_excel.to_csv('Faltantes/faltantes_codigos_nap_en_bd.csv', index=False, header=False)
-            print("Archivo de valores faltantes exportado correctamente.")
+            fecha_actual = datetime.now().strftime('%Y%m%d')
+
+            for cluster, faltantes in faltantes_por_cluster.items():
+                # Crear un DataFrame con los valores faltantes
+                df_faltantes = pd.DataFrame(faltantes, columns=['nap'])
+
+                # Generar el nombre del archivo CSV
+                nombre_archivo = f"Faltantes/faltante_naps_{fecha_actual}_{cluster}.csv"
+
+                # Exportar los faltantes a un archivo CSV sin el header
+                df_faltantes.to_csv(nombre_archivo, index=False, header=False)
+                print(f"Archivo exportado: {nombre_archivo}")
+
+                # Guardar el nombre del cluster en un archivo de texto
+                with open('cluster_name.txt', 'w') as file:
+                    file.write(cluster)
+
         else:
-            print("Error: El archivo Excel no contiene la columna 'CODIGO_NAP'.")
+            print("Error: El archivo Excel no contiene las columnas 'CODIGO_NAP' o 'CLUSTER'.")
         
         # Cerrar la conexión a la base de datos
         connection.close()

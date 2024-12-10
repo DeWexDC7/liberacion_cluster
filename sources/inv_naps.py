@@ -26,7 +26,7 @@ def leer_csv_sin_header(ruta_csv):
         return None
 
 # Función para procesar los datos faltantes
-def procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, postgres_connection, exportar, ruta_salida_base):
+def procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, postgres_connection, exportar, ruta_salida_base, cluster):
     """
     Procesa los datos faltantes desde un archivo Excel, los cruza con los faltantes,
     y exporta el resultado filtrado.
@@ -85,7 +85,7 @@ def procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, postgres_c
             # Obtener la fecha actual
             fecha_actual = datetime.now().strftime('%Y%m%d')
             # Crear el nombre del archivo con la fecha
-            nombre_archivo = f"Registros_Naps/{ruta_salida_base}_{fecha_actual}.xlsx"
+            nombre_archivo = f"Registros_Naps/{ruta_salida_base}_{fecha_actual}_{cluster}.xlsx"
             # Exportar a Excel
             resultado.to_excel(nombre_archivo, index=False)
             print(f"Archivo exportado: {nombre_archivo}")
@@ -138,7 +138,6 @@ def definicion_variables(df):
         print(f"Error al definir las variables: {e}")
         return None
 
-# Función para subir los datos obtenidos en variables independientes a una bd
 def subir_datos_a_bd(variables, radiusmain_credentials):
     """
     Sube los datos obtenidos en variables independientes a la base de datos radiusmain.
@@ -148,6 +147,14 @@ def subir_datos_a_bd(variables, radiusmain_credentials):
         # Convertir valores a tipos nativos de Python
         variables = {k: (v.item() if hasattr(v, 'item') else v) for k, v in variables.items()}
         
+        # Validar que todos los valores requeridos estén presentes
+        required_keys = ['hub', 'cluster', 'olt', 'frame', 'slot', 'puerto', 'nap', 
+                         'puertos_nap', 'latitud', 'longitud', 'coordenadas', 'region', 'zona']
+        
+        for key in required_keys:
+            if key not in variables or variables[key] is None:
+                variables[key] = '[null]'  # Valor predeterminado
+
         # Conexión a la base de datos radiusmain
         connection = psycopg2.connect(
             database=radiusmain_credentials['dbname'],
@@ -157,17 +164,19 @@ def subir_datos_a_bd(variables, radiusmain_credentials):
             port=radiusmain_credentials['port']
         )
         cursor = connection.cursor()
+        fecha_de_liberacion = datetime.now().strftime('%Y-%m-%d')
         
         # Insertar los datos en la tabla
         query = """
             INSERT INTO public.inv_naps 
-            (hub, cluster, olt, frame, slot, puerto, nap, puertos_nap, latitud, longitud, coordenadas, region) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (hub, cluster, olt, frame, slot, puerto, nap, puertos_nap, latitud, longitud, coordenadas, region, fecha_de_liberacion, zona) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         cursor.execute(query, (
             variables['hub'], variables['cluster'], variables['olt'], variables['frame'],
             variables['slot'], variables['puerto'], variables['nap'], variables['puertos_nap'],
-            variables['latitud'], variables['longitud'], variables['coordenadas'], variables['region']
+            variables['latitud'], variables['longitud'], variables['coordenadas'], variables['region'],
+            fecha_de_liberacion, variables['zona']
         ))
         connection.commit()
         print("Datos subidos correctamente.")
@@ -176,6 +185,7 @@ def subir_datos_a_bd(variables, radiusmain_credentials):
     finally:
         if 'connection' in locals() and connection:
             connection.close()
+
 
 # Función principal
 def main():
@@ -187,7 +197,17 @@ def main():
     hoja = 'Correo'
     exportar = True
     ruta_salida_base = 'Resultados_NAP'
-    ruta_csv_faltantes = 'Faltantes/faltantes_codigos_nap_en_bd.csv'
+    
+    # Leer el nombre del cluster desde el archivo de texto
+    try:
+        with open('cluster_name.txt', 'r') as file:
+            cluster = file.read().strip()
+    except Exception as e:
+        print(f"Error al leer el archivo de nombre del cluster: {e}")
+        return
+
+    fecha_actual = datetime.now().strftime('%Y%m%d')
+    ruta_csv_faltantes = f'Faltantes/faltante_naps_{fecha_actual}_{cluster}.csv'
 
     db_credentials, radiusmain_credentials = read_db_credentials(config_path)
 
@@ -208,7 +228,7 @@ def main():
 
     if df_faltantes is not None and not df_faltantes.empty:
         print("-----Procesando códigos NAP faltantes-----")
-        df_resultado = procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, postgres_connection, exportar, ruta_salida_base)
+        df_resultado = procesar_busqueda_por_faltantes(df_faltantes, ruta_archivo, hoja, postgres_connection, exportar, ruta_salida_base, cluster)
         
         if df_resultado is not None and not df_resultado.empty:
             print("Datos procesados y exportados correctamente.")
