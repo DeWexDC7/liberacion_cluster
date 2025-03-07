@@ -22,6 +22,6 @@ def ejecutar_scripts():
     inv_naps.main()
 
 if __name__ == '__main__':
-    # Agrega el directorio 'sources' al path de Python
+    # Agrega el directorio 'sources' al path                                                                                                                                      de Python
     sys.path.append('./sources') 
     ejecutar_scripts()

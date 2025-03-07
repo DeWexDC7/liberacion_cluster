@@ -22,7 +22,7 @@ def leer_csv_sin_header(ruta_csv):
         df['CODIGO_NAP'] = df['CODIGO_NAP'].astype(str).str.strip().str.upper()  # Normalizar
         return df
     except Exception as e:
-        print(f"Error al leer el archivo CSV: {e}")
+        print("El archivo csv no ha sido generado")
         return None
 
 # Función para procesar los datos faltantes
@@ -202,9 +202,6 @@ def main():
         if df_resultado is not None and not df_resultado.empty:
             print("Datos procesados y exportados correctamente.")
             subir_datos_a_bd(df_resultado, radiusmain_credentials)
-
-    else:
-        print("Error al cargar los valores faltantes desde el archivo CSV.")
 
     if postgres_connection:
         postgres_connection.close()

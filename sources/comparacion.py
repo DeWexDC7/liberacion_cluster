@@ -82,6 +82,9 @@ def verificar_faltantes(df, connection):
 
             if faltantes_excel:
                 faltantes_por_cluster[cluster] = faltantes_excel
+            
+            else:
+                print("Todos los códigos naps está registrados en la bd")
 
         return faltantes_por_cluster
 
